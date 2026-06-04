@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+#
+# generate-tests — regenerate a SalesLabb product's Playwright test-case CSV
+# and push it to S3, using the per-product Python scripts that already live
+# in the ticket folder's `fresh-csv-from-raw/` subfolder.
+#
+# Usage:
+#   generate-tests <ticket-folder-name-or-absolute-path>
+#
+# Examples:
+#   generate-tests PROD-2022-2039-PlanUpdate-XenHealth-AbuDhabi-DubaiNE
+#   generate-tests /home/me/work/PROD-XXXX-foo
+#
+# How it works:
+#   1. Locates the ticket folder (search common locations OR absolute path).
+#   2. Looks for <folder>/fresh-csv-from-raw/ with extract_*.py + build_*.py.
+#   3. Runs the extract script (parses raw xlsx/PDF → JSON).
+#   4. Runs the build script (JSON + per-insurer rules → CSV).
+#   5. Uploads the resulting CSV to S3 via the existing Python uploader.
+#
+# If the folder doesn't yet have `fresh-csv-from-raw/` with generator scripts,
+# this CLI cannot bootstrap them — that's a one-time-per-product step the
+# product owner runs via Claude Code's `/generate-tests` slash command. After
+# that initial bootstrap, devs can use THIS bash command for every rate update.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TC_GEN_ROOT="$(dirname "$SCRIPT_DIR")"   # tools/test-case-generator/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Arg validation
+# ─────────────────────────────────────────────────────────────────────────────
+if [ $# -ne 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+  cat <<EOF
+Usage: generate-tests <ticket-folder-name-or-absolute-path>
+
+Examples:
+  generate-tests PROD-2022-2039-PlanUpdate-XenHealth-AbuDhabi-DubaiNE
+  generate-tests /home/me/work/PROD-XXXX-foo
+
+For a new product (no scripts yet), ask the product owner to bootstrap them
+via Claude Code's /generate-tests slash command. This CLI only works once
+the per-product generator scripts exist in <folder>/fresh-csv-from-raw/.
+EOF
+  exit 1
+fi
+
+ARG="$1"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Resolve ticket folder
+# ─────────────────────────────────────────────────────────────────────────────
+resolve_folder() {
+  local arg="$1"
+
+  # Absolute path
+  if [[ "$arg" == /* ]] && [ -d "$arg" ]; then
+    echo "$arg"
+    return 0
+  fi
+
+  # Search common locations
+  local candidates=(
+    "$PWD/$arg"
+    "$PWD/../$arg"
+    "$PWD/../auto-onboarding/$arg"
+    "$HOME/$arg"
+    "$HOME/Desktop/$arg"
+    "$HOME/Desktop/auto-onboarding/$arg"
+    "$HOME/Desktop/MIRO/auto-onboarding/$arg"
+    "$HOME/tickets/$arg"
+    "$HOME/work/$arg"
+    "$HOME/Documents/$arg"
+  )
+  for c in "${candidates[@]}"; do
+    if [ -d "$c" ]; then
+      ( cd "$c" && pwd )
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+if ! TICKET_DIR=$(resolve_folder "$ARG"); then
+  echo "ERROR: ticket folder '$ARG' not found in any known location." >&2
+  echo "Pass an absolute path instead, e.g.:" >&2
+  echo "  generate-tests /home/$USER/work/PROD-XXXX-foo" >&2
+  exit 2
+fi
+
+FRESH_DIR="$TICKET_DIR/fresh-csv-from-raw"
+if [ ! -d "$FRESH_DIR" ]; then
+  echo "ERROR: $TICKET_DIR has no fresh-csv-from-raw/ subfolder." >&2
+  echo "This product hasn't been bootstrapped yet. Ask the product owner to" >&2
+  echo "run /generate-tests in Claude Code first to create the generator scripts." >&2
+  exit 3
+fi
+
+echo "──────────────────────────────────────────────────────────────"
+echo " Ticket folder : $TICKET_DIR"
+echo " Scripts in    : $FRESH_DIR"
+echo "──────────────────────────────────────────────────────────────"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Run extract_*.py (parses raw rate xlsx/PDF → JSON intermediate)
+# ─────────────────────────────────────────────────────────────────────────────
+shopt -s nullglob
+EXTRACT_SCRIPTS=( "$FRESH_DIR"/extract_*.py )
+BUILD_SCRIPTS=( "$FRESH_DIR"/build_*.py )
+shopt -u nullglob
+
+if [ ${#EXTRACT_SCRIPTS[@]} -eq 0 ]; then
+  echo "ERROR: no extract_*.py script in $FRESH_DIR." >&2
+  exit 4
+fi
+if [ ${#BUILD_SCRIPTS[@]} -eq 0 ]; then
+  echo "ERROR: no build_*.py script in $FRESH_DIR." >&2
+  exit 4
+fi
+
+echo
+echo "Step 1/3 — Extracting raw rates"
+for s in "${EXTRACT_SCRIPTS[@]}"; do
+  echo "  → python3 $(basename "$s")"
+  ( cd "$FRESH_DIR" && python3 "$s" )
+done
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Run build_*.py (apply per-insurer rules → CSV)
+# ─────────────────────────────────────────────────────────────────────────────
+# Prefer build_*_full.py (full set) over build_*_smoke.py if both exist.
+echo
+echo "Step 2/3 — Building CSV"
+BUILD_SCRIPT=""
+for s in "${BUILD_SCRIPTS[@]}"; do
+  case "$(basename "$s")" in
+    *_full.py|*full*.py) BUILD_SCRIPT="$s"; break ;;
+  esac
+done
+[ -z "$BUILD_SCRIPT" ] && BUILD_SCRIPT="${BUILD_SCRIPTS[0]}"
+echo "  → python3 $(basename "$BUILD_SCRIPT")"
+( cd "$FRESH_DIR" && python3 "$BUILD_SCRIPT" )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Find the resulting CSV file
+# ─────────────────────────────────────────────────────────────────────────────
+shopt -s nullglob
+CSV_CANDIDATES=( "$FRESH_DIR"/*_full.csv "$FRESH_DIR"/*_fresh.csv "$FRESH_DIR"/*.csv )
+shopt -u nullglob
+if [ ${#CSV_CANDIDATES[@]} -eq 0 ]; then
+  echo "ERROR: build script did not produce a CSV in $FRESH_DIR." >&2
+  exit 5
+fi
+# Pick the newest .csv (most likely the build's output)
+CSV_FILE=$(ls -t "${CSV_CANDIDATES[@]}" | head -1)
+echo "  → produced: $(basename "$CSV_FILE") ($(wc -l < "$CSV_FILE") lines)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Upload to S3 — uses the existing Python uploader
+# ─────────────────────────────────────────────────────────────────────────────
+echo
+echo "Step 3/3 — Uploading to S3"
+PROVIDER_LABEL="${PROVIDER_LABEL:-}"
+if [ -z "$PROVIDER_LABEL" ]; then
+  echo "  ⚠ PROVIDER_LABEL env var not set — skipping S3 upload."
+  echo "  ⚠ To upload, set it and re-run, e.g.:"
+  echo "      PROVIDER_LABEL='Xen Health UAE - Dubai & Northern Emirates' generate-tests $ARG"
+  echo
+  echo "  Or upload manually with the existing Python uploader:"
+  echo "      python3 -m src.common.s3_uploader \\"
+  echo "          --csv '$CSV_FILE' \\"
+  echo "          --product-label 'Xen Health UAE - Dubai & Northern Emirates'"
+else
+  echo "  Provider label: $PROVIDER_LABEL"
+  ( cd "$TC_GEN_ROOT" && python3 -m src.common.s3_uploader \
+      --csv "$CSV_FILE" \
+      --product-label "$PROVIDER_LABEL" )
+fi
+
+echo
+echo "──────────────────────────────────────────────────────────────"
+echo "  ✓ Done."
+echo "──────────────────────────────────────────────────────────────"
