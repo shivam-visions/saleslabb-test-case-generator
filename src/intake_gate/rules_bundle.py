@@ -172,3 +172,14 @@ def run_info(ctx) -> None:
             str(cr).strip().lower() not in {"true", "false", "1", "0"}:
         ctx.add("T2-INFO-010", Severity.WARN, name,
                 f"currentRates '{cr}' is not boolean-like")
+
+    # T2-INFO-012 — VAT advisory (G1: PROD-1930 "Remove VAT"). Non-UAE
+    # products often need the §12.10 applicableTaxes suppression hand-patch
+    # in provider/index.js; the workbooks cannot express it.
+    res_keys = cfg.get("residencies_list") or []
+    uae_markers = ("AE", "NE_", "Dubai", "AbuDhabi", "DXB", "AUH")
+    if res_keys and not any(any(m in k for m in uae_markers) for k in res_keys):
+        ctx.add("T2-INFO-012", Severity.INFO, name,
+                f"non-UAE residencies ({'/'.join(res_keys[:3])}…): if this "
+                "product is VAT-free, provider/index.js needs the "
+                "applicableTaxes override (§12.10) — VAT displays by default")

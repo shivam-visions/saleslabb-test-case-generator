@@ -49,7 +49,7 @@ have caught it.
 |---|---|---|---|
 | B1/T1 — intake completeness | 2 | 8% | 8% |
 | T2 — rules that fire **today** | 2 | 8% | 15% |
-| T2 — five cheap new rules identified | 5 | 19% | **35%** |
+| T2 — five new rules (IMPLEMENTED 2026-06-04 evening: T2-ADD-007/008, T2-BEN-010/011, T2-RATE-013, T2-INFO-012) | 5 | 19% | **35% — live** |
 | B3 — Stage-1 extraction-confidence review | 2 | 8% | **42%** |
 | T3 — sandbox verify vs raw (incl. Orient extractor + condition checks) | 4 | 15% | **58%** |
 | Semantic (wording/display/judgment) | 9 | 35% | — |

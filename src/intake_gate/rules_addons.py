@@ -33,6 +33,64 @@ def run_addons(ctx) -> None:
                     f"(older dialect — confirm parser version handles it): "
                     f"{no_opt[:6]}{'…' if len(no_opt) > 6 else ''}")
 
+        # T2-ADD-008 — duplicate option rows (G1: PROD-1968 "duplicate/unclear
+        # options — update only confirmed ones"). Key includes description:
+        # same-label rows with different descriptions are distinct options
+        # (calibrated on shipped PROD-1845). Aggregated per sheet.
+        for ps in parents:
+            seen: dict[tuple, int] = {}
+            dup_labels: list[str] = []
+            rownos = getattr(ps, "row_numbers", list(range(2, len(ps.rows) + 2)))
+            for r, rn in zip(ps.dicts(), rownos):
+                key = (cell_str(r.get("label")).strip(),
+                       cell_str(r.get("plan")).strip(),
+                       cell_str(r.get("flag")).strip(),
+                       cell_str(r.get("description")).strip())
+                if not key[0]:
+                    continue
+                if key in seen:
+                    dup_labels.append(f"{key[0]!r} (rows {seen[key]}+{rn})")
+                else:
+                    seen[key] = rn
+            if dup_labels:
+                ctx.add("T2-ADD-008", Severity.WARN, name,
+                        f"{len(dup_labels)} exact-duplicate option row(s) in "
+                        f"sheet '{ps.name}': {dup_labels[:4]} — ambiguous "
+                        "options stall dev work (G1 #21)", sheet=ps.name)
+
+        # T2-ADD-007 — eligibility-condition pattern (G1: maternity priced for
+        # male applicants post-live, PROD-2022). Maternity-shaped addons must
+        # carry the documented gender/maritalStatus/age conditions.
+        # Calibration: the older dialect (PROD-1845) has NO condition columns
+        # at all — conditions live in hand-edits, so flag as WARN, not ERROR.
+        for ps in parents:
+            if "maternity" not in ps.name.lower():
+                continue
+            headers = {h.strip() for h in ps.header if isinstance(h, str)}
+            dialect_has_conditions = bool(
+                headers & {"gender", "minAge", "maxAge", "maritalStatus"})
+            rownos = getattr(ps, "row_numbers", list(range(2, len(ps.rows) + 2)))
+            if not dialect_has_conditions:
+                ctx.add("T2-ADD-007", Severity.WARN, name,
+                        f"maternity addon sheet '{ps.name}' has no condition "
+                        "columns (older dialect) — eligibility must be "
+                        "enforced via hand-edited modifier conditions; "
+                        "verify gender/maritalStatus gating exists downstream",
+                        sheet=ps.name)
+                continue
+            for r, rn in zip(ps.dicts(), rownos):
+                typ = cell_str(r.get("type")).strip()
+                if not typ or typ == "none":
+                    continue
+                gender = cell_str(r.get("gender")).strip().lower()
+                if gender != "female":
+                    ctx.add("T2-ADD-007", Severity.ERROR, name,
+                            f"maternity addon option (sheet '{ps.name}') lacks "
+                            f"gender=female condition (got {gender or 'empty'!r}) "
+                            "— maternity premium would apply to male "
+                            "applicants (schema §addons common shapes)",
+                            sheet=ps.name, row=rn)
+
         for ps in parents:
             rownos = getattr(ps, "row_numbers", list(range(2, len(ps.rows) + 2)))
             for r, rn in zip(ps.dicts(), rownos):

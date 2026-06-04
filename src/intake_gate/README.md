@@ -54,6 +54,15 @@ Seeded-defect run (Xen copy, 6 defect classes: missing addons file, planName
 typo, copay trailing space, non-numeric rate, age-band overlap, multi-line
 Annual Limit): **6/6 caught**, each with the right rule and row.
 
+**G1 follow-up rules (added 2026-06-04 evening, lifting static catch-rate
+15% → 35%):** T2-ADD-007 maternity eligibility-condition pattern (WARN for the
+older no-condition-columns dialect), T2-ADD-008 exact-duplicate option rows
+(key includes description; per-sheet aggregate), T2-BEN-010 copay/deductible
+option ordering, T2-BEN-011 duplicate copay tokens, T2-RATE-013
+plan×coverage×currency completeness, T2-INFO-012 non-UAE VAT advisory (INFO).
+Regression: 4/4 shipped bundles still pass with 0 errors; the new BEN-010
+warnings on PROD-1985/1930 reproduce the actual G1 #16 dev query.
+
 ## Maintenance
 
 Rules encode the dev team's "missing / off" definitions (proposal §7 "Roles").

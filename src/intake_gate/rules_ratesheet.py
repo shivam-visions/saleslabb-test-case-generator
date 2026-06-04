@@ -153,6 +153,29 @@ def run_ratesheet(ctx) -> None:
                             f"{partial} — missing combos throw 'No rates found for "
                             "base key' unless intentionally plan-scoped", sheet=sname)
 
+        # T2-RATE-013 — plan×coverage×currency completeness (G1: PROD-1968
+        # "USD have WW, but EUR, GBP don't"). When per-currency rate columns
+        # exist, every (plan × coverage) group should price every currency.
+        ccy_cols = [h for h in headers
+                    if CURRENCY_COL.fullmatch(h) or h.startswith("rates/")]
+        if ccy_cols:
+            cov_ccy: dict[tuple, set] = {}
+            for r in rows:
+                key = (cell_str(r.get("planName")).strip(),
+                       cell_str(r.get("coverage")).strip())
+                filled = {c for c in ccy_cols if _num(r.get(c)) not in (None,)}
+                cov_ccy.setdefault(key, set()).update(filled)
+            all_ccy = set().union(*cov_ccy.values()) if cov_ccy else set()
+            gaps = {f"{p} × {c}": sorted(all_ccy - s)
+                    for (p, c), s in cov_ccy.items() if s != all_ccy}
+            if gaps:
+                ctx.add("T2-RATE-013", Severity.WARN, name,
+                        f"currency coverage uneven across plan×coverage "
+                        f"groups (columns {sorted(all_ccy)}): missing "
+                        f"{dict(list(gaps.items())[:5])} — mirrors the "
+                        "PROD-1968 'USD has WW, EUR/GBP don't' gap",
+                        sheet=sname)
+
         # T2-RATE-012 — residency values should be known residency keys
         # (info.residencies cell + runtime 'residencies' sheet). WARN, not
         # ERROR: pilot showed dialects where this column carries other

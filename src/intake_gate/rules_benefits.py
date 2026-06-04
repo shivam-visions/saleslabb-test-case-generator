@@ -166,6 +166,35 @@ def run_benefits(ctx) -> None:
             ctx.add("T2-BEN-007", Severity.WARN, name,
                     f"known defect text '{t}' appears in {n} cell(s)", sheet=sname)
 
+        # T2-BEN-010 / T2-BEN-011 — copay option ordering + duplicates
+        # (G1: PROD-1930 "arrange the IP deductibles in order";
+        #  PROD-1968 duplicate deductible options)
+        for copay_label in COPAY_ROWS:
+            if copay_label not in rows:
+                continue
+            rn, r = rows[copay_label]
+            for i, hs in plans:
+                toks = [t.strip() for t in cell_str(r[i] if i < len(r) else None)
+                        .split("/") if t.strip()]
+                dupes = {t for t in toks if toks.count(t) > 1}
+                if dupes:
+                    ctx.add("T2-BEN-011", Severity.WARN, name,
+                            f"duplicate copay/deductible option(s) for "
+                            f"'{hs}': {sorted(dupes)[:4]} — ambiguous options "
+                            "stall dev work (G1 #21)", sheet=sname, row=rn)
+                nums = []
+                for t in toks:
+                    m = re.search(r"([\d,]+(?:\.\d+)?)", t)
+                    nums.append(0.0 if m is None
+                                else float(m.group(1).replace(",", "")))
+                if len(nums) > 2 and nums != sorted(nums) \
+                        and nums != sorted(nums, reverse=True):
+                    ctx.add("T2-BEN-010", Severity.WARN, name,
+                            f"copay/deductible options for '{hs}' are not in "
+                            "monotonic order — dashboard displays them as "
+                            "listed (G1 #16: 'arrange IP deductibles in order')",
+                            sheet=sname, row=rn)
+
         # T2-BEN-008 — Geographical Coverage must not be bullet-prefixed
         if ROW_GEO in rows:
             rn, r = rows[ROW_GEO]
